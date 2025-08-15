@@ -3,4 +3,5 @@ pillow
 numpy
 scikit-learn
 pandas
+tensorflow
 openpyxl
