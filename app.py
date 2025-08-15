@@ -1,7 +1,6 @@
 import streamlit as st
 import os
 import tempfile
-import shutil
 from PIL import Image
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
@@ -10,10 +9,24 @@ from openpyxl import Workbook
 # ---------------------------
 # UTILS
 # ---------------------------
-def image_to_feature_vector(image_path, size=(64, 64)):
+
+def image_to_feature_vector(image_path, size=(64, 64), bins=(8, 8, 8)):
+    """
+    Convert an image to a normalized color histogram feature vector.
+    """
     img = Image.open(image_path).convert("RGB")
     img = img.resize(size)
-    return np.array(img).flatten()
+    img_np = np.array(img)
+
+    # Compute histogram for each channel
+    hist_r, _ = np.histogram(img_np[:, :, 0], bins=bins[0], range=(0, 256))
+    hist_g, _ = np.histogram(img_np[:, :, 1], bins=bins[1], range=(0, 256))
+    hist_b, _ = np.histogram(img_np[:, :, 2], bins=bins[2], range=(0, 256))
+
+    # Concatenate histograms and normalize
+    hist = np.concatenate([hist_r, hist_g, hist_b]).astype("float32")
+    hist /= np.sum(hist)  # Normalize
+    return hist
 
 def cluster_images(image_paths, similarity_threshold=0.9):
     features = [image_to_feature_vector(p) for p in image_paths]
@@ -64,8 +77,9 @@ def save_clusters_to_excel(clusters, output_path):
 # ---------------------------
 # STREAMLIT APP
 # ---------------------------
-st.title("📸 Image Clustering App (90% Similarity)")
-st.write("Upload images — we'll group them by **visual similarity** and name clusters from SKU names.")
+
+st.title("📸 Image Clustering App (Color Histogram)")
+st.write("Upload images — we'll group them by **visual similarity** using color histograms.")
 
 uploaded_files = st.file_uploader("Upload Images", type=["png", "jpg", "jpeg"], accept_multiple_files=True)
 
@@ -73,24 +87,13 @@ if uploaded_files:
     total_size = sum([len(f.getbuffer()) for f in uploaded_files])
     st.write(f"Total upload size: {total_size / (1024*1024):.2f} MB")
 
-    # Decide processing mode
-    if total_size > 150 * 1024 * 1024:
-        st.warning("⚠️ Large upload — processing locally to avoid memory crash.")
-        tmpdir = tempfile.mkdtemp()
-        image_paths = []
-        for file in uploaded_files:
-            path = os.path.join(tmpdir, file.name)
-            with open(path, "wb") as f:
-                f.write(file.getbuffer())
-            image_paths.append(path)
-    else:
-        tmpdir = tempfile.mkdtemp()
-        image_paths = []
-        for file in uploaded_files:
-            path = os.path.join(tmpdir, file.name)
-            with open(path, "wb") as f:
-                f.write(file.getbuffer())
-            image_paths.append(path)
+    tmpdir = tempfile.mkdtemp()
+    image_paths = []
+    for file in uploaded_files:
+        path = os.path.join(tmpdir, file.name)
+        with open(path, "wb") as f:
+            f.write(file.getbuffer())
+        image_paths.append(path)
 
     with st.spinner("🔍 Clustering images..."):
         clusters = cluster_images(image_paths, similarity_threshold=0.9)
@@ -117,5 +120,3 @@ if uploaded_files:
             file_name="clusters.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
-
-    # Cleanup will happen automatically when app restarts
