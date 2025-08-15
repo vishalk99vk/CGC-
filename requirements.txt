@@ -1,8 +1,5 @@
-streamlit
+scikit-image
 tensorflow
-keras
 numpy
 pandas
-scikit-learn
-Pillow
-openpyxl
+streamlit
