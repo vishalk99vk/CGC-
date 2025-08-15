@@ -1,7 +1,9 @@
 streamlit
-numpy
+numpy==1.26.4
 Pillow
 scikit-learn
-tensorflow
+tensorflow==2.16.1
+keras==3.1.1
 pandas
 openpyxl
+h5py
