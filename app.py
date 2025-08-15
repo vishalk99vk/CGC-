@@ -64,20 +64,22 @@ if uploaded_files:
     # Compute similarity
     sim_matrix = cosine_similarity(features)
 
-    # Clustering (manual based on threshold)
-    threshold = 0.97  # 96% similarity
-    visited = set()
-    clusters = []
-    for idx, file in enumerate(file_paths):
-        if idx in visited:
-            continue
-        cluster = [idx]
-        visited.add(idx)
-        for j in range(idx + 1, len(file_paths)):
-            if j not in visited and sim_matrix[idx, j] >= threshold:
-                cluster.append(j)
-                visited.add(j)
-        clusters.append(cluster)
+    # Clustering (manual based on threshold between 93% and 99%)
+min_threshold = 0.93
+max_threshold = 0.99
+visited = set()
+clusters = []
+
+for idx, file in enumerate(file_paths):
+    if idx in visited:
+        continue
+    cluster = [idx]
+    visited.add(idx)
+    for j in range(idx + 1, len(file_paths)):
+        if j not in visited and min_threshold <= sim_matrix[idx, j] <= max_threshold:
+            cluster.append(j)
+            visited.add(j)
+    clusters.append(cluster)
 
     # Prepare DataFrame for Excel
     data = []
