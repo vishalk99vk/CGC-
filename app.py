@@ -1,5 +1,6 @@
 import streamlit as st
 import os
+import zipfile
 import numpy as np
 from PIL import Image
 from sklearn.metrics.pairwise import cosine_similarity
@@ -7,16 +8,13 @@ from tensorflow.keras.applications.resnet50 import ResNet50, preprocess_input
 from tensorflow.keras.preprocessing import image
 import pandas as pd
 from io import BytesIO
-from zipfile import ZipFile
 
 # Load ResNet50 model for feature extraction
 model = ResNet50(weights='imagenet', include_top=False, pooling='avg')
 
-st.title("Image Similarity Clustering App")
+st.title("Image Similarity Clustering App (ZIP Upload)")
 
-uploaded_files = st.file_uploader(
-    "Upload Images", type=["jpg", "jpeg", "png"], accept_multiple_files=True
-)
+uploaded_zip = st.file_uploader("Upload ZIP file containing images", type=["zip"])
 
 def extract_features(img_path):
     img = image.load_img(img_path, target_size=(224, 224))
@@ -41,12 +39,14 @@ def transitive_clustering(sim_matrix, min_threshold=0.93, max_threshold=0.99):
     n = sim_matrix.shape[0]
     clusters = []
     visited = set()
+
     for idx in range(n):
         if idx in visited:
             continue
         cluster = set([idx])
         queue = [idx]
         visited.add(idx)
+
         while queue:
             current = queue.pop(0)
             for j in range(n):
@@ -54,68 +54,62 @@ def transitive_clustering(sim_matrix, min_threshold=0.93, max_threshold=0.99):
                     cluster.add(j)
                     queue.append(j)
                     visited.add(j)
+
         clusters.append(list(cluster))
     return clusters
 
-if uploaded_files:
+if uploaded_zip:
     temp_dir = "temp_uploads"
     os.makedirs(temp_dir, exist_ok=True)
-    file_paths = []
-    for file in uploaded_files:
-        file_path = os.path.join(temp_dir, file.name)
-        with open(file_path, "wb") as f:
-            f.write(file.read())
-        file_paths.append(file_path)
 
-    features = np.array([extract_features(path) for path in file_paths])
-    sim_matrix = cosine_similarity(features)
+    # Save uploaded zip
+    zip_path = os.path.join(temp_dir, "uploaded.zip")
+    with open(zip_path, "wb") as f:
+        f.write(uploaded_zip.read())
 
-    clusters = transitive_clustering(sim_matrix, min_threshold=0.93, max_threshold=0.99)
+    # Extract zip
+    with zipfile.ZipFile(zip_path, "r") as zip_ref:
+        zip_ref.extractall(temp_dir)
 
-    # Prepare DataFrame for Excel
-    data = []
-    for cluster in clusters:
-        cluster_files = [os.path.basename(file_paths[i]) for i in cluster]
-        cluster_name = get_common_cluster_name(cluster_files)
-        for fname in cluster_files:
-            name_no_ext = os.path.splitext(fname)[0]
-            data.append([cluster_name, name_no_ext, fname])
+    # Get image files
+    file_paths = [os.path.join(temp_dir, f) for f in os.listdir(temp_dir)
+                  if f.lower().endswith((".jpg", ".jpeg", ".png"))]
 
-    df = pd.DataFrame(data, columns=["Cluster Name", "Image Name (No Ext)", "Exact Filename"])
+    if file_paths:
+        features = np.array([extract_features(path) for path in file_paths])
+        sim_matrix = cosine_similarity(features)
 
-    # Display clusters in Streamlit
-    for cluster in clusters:
-        cluster_files = [os.path.basename(file_paths[i]) for i in cluster]
-        cluster_name = get_common_cluster_name(cluster_files)
-        st.subheader(f"Cluster: {cluster_name}")
-        cols = st.columns(len(cluster_files))
-        for col, idx in zip(cols, cluster):
-            img = Image.open(file_paths[idx])
-            col.image(img, caption=os.path.basename(file_paths[idx]), use_container_width=True)
+        clusters = transitive_clustering(sim_matrix, min_threshold=0.93, max_threshold=0.99)
 
-    # Download Excel
-    excel_buffer = BytesIO()
-    df.to_excel(excel_buffer, index=False)
-    excel_buffer.seek(0)
-    st.download_button(
-        label="📥 Download Clusters Excel",
-        data=excel_buffer,
-        file_name="image_clusters.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
-
-    # Download ZIP of clustered images
-    zip_buffer = BytesIO()
-    with ZipFile(zip_buffer, "w") as zip_file:
+        data = []
         for cluster in clusters:
-            cluster_name = get_common_cluster_name([os.path.basename(file_paths[i]) for i in cluster])
-            for idx in cluster:
-                fname = os.path.basename(file_paths[idx])
-                zip_file.write(file_paths[idx], arcname=f"{cluster_name}/{fname}")
-    zip_buffer.seek(0)
-    st.download_button(
-        label="📥 Download Clustered Images ZIP",
-        data=zip_buffer,
-        file_name="clustered_images.zip",
-        mime="application/zip"
-    )
+            cluster_files = [os.path.basename(file_paths[i]) for i in cluster]
+            cluster_name = get_common_cluster_name(cluster_files)
+            for fname in cluster_files:
+                name_no_ext = os.path.splitext(fname)[0]
+                data.append([cluster_name, name_no_ext, fname])
+
+        df = pd.DataFrame(data, columns=["Cluster Name", "Image Name (No Ext)", "Exact Filename"])
+
+        # Display clusters
+        for cluster in clusters:
+            cluster_files = [os.path.basename(file_paths[i]) for i in cluster]
+            cluster_name = get_common_cluster_name(cluster_files)
+            st.subheader(f"Cluster: {cluster_name}")
+            cols = st.columns(len(cluster_files))
+            for col, idx in zip(cols, cluster):
+                img = Image.open(file_paths[idx])
+                col.image(img, caption=os.path.basename(file_paths[idx]), use_container_width=True)
+
+        # Download Excel
+        excel_buffer = BytesIO()
+        df.to_excel(excel_buffer, index=False)
+        excel_buffer.seek(0)
+        st.download_button(
+            label="📥 Download Clusters Excel",
+            data=excel_buffer,
+            file_name="image_clusters.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+    else:
+        st.warning("No image files found in the ZIP.")
