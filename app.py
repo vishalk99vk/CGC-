@@ -1,64 +1,183 @@
+import streamlit as st
 import os
-import cv2
 import numpy as np
-from skimage.feature import local_binary_pattern
+from PIL import Image
+from sklearn.metrics.pairwise import cosine_similarity
+from tensorflow.keras.applications.resnet50 import ResNet50, preprocess_input
+from tensorflow.keras.preprocessing import image
+import pandas as pd
+from io import BytesIO
 from sklearn.cluster import DBSCAN
-from sklearn.preprocessing import StandardScaler
+import shutil
 
-# --- Parameters ---
-folder_path = "path_to_your_images"
-radius = 3
-n_points = 8 * radius
-eps = 0.05  # DBSCAN distance threshold (tune for ~95% similarity)
-min_samples = 2  # minimum images per cluster
+# Load ResNet50 model for feature extraction
+# A single instance of the model is loaded and cached to improve performance
+@st.cache_resource
+def load_model():
+    """Loads the ResNet50 model with imagenet weights."""
+    return ResNet50(weights='imagenet', include_top=False, pooling='avg')
 
-# --- Helper functions ---
-def extract_texture(image):
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    lbp = local_binary_pattern(gray, n_points, radius, method='uniform')
-    hist, _ = np.histogram(lbp.ravel(), bins=np.arange(0, n_points+3), density=True)
-    return hist
+model = load_model()
 
-def extract_color(image):
-    # Mean RGB values
-    return cv2.mean(image)[:3]
+st.title("Image Similarity Clustering App")
 
-def extract_test_level(filename):
-    # Example: extract numeric from filename like "product_12mg.jpg"
-    import re
-    match = re.search(r'(\d+)', filename)
-    return [float(match.group(1))] if match else [0]
+# --- Initialize session state for uploaded files ---
+if "uploaded_files" not in st.session_state:
+    st.session_state.uploaded_files = []
 
-# --- Load images and extract features ---
-features = []
-image_names = []
+# --- File uploader and duplicate check ---
+uploaded = st.file_uploader(
+    "Upload Images", type=["jpg", "jpeg", "png"], accept_multiple_files=True
+)
 
-for fname in os.listdir(folder_path):
-    if fname.lower().endswith(('.jpg', '.png', '.jpeg')):
-        img_path = os.path.join(folder_path, fname)
-        img = cv2.imread(img_path)
-        if img is None:
-            continue
-        tex = extract_texture(img)
-        col = extract_color(img)
-        test = extract_test_level(fname)
-        feat = np.concatenate([tex, col, test])
-        features.append(feat)
-        image_names.append(fname)
+if uploaded:
+    # Use a set for efficient O(1) duplicate checks
+    existing_file_names = {file.name for file in st.session_state.uploaded_files}
 
-features = np.array(features)
-features = StandardScaler().fit_transform(features)  # normalize features
+    for file in uploaded:
+        if file.name not in existing_file_names:
+            st.session_state.uploaded_files.append(file)
+            existing_file_names.add(file.name)
 
-# --- DBSCAN clustering ---
-db = DBSCAN(eps=eps, min_samples=min_samples, metric='euclidean')
-labels = db.fit_predict(features)
+# --- Clear All button ---
+if st.button("🗑️ Clear All"):
+    st.session_state.uploaded_files = []
+    # Clear the temporary directory if it exists, though no longer used in this version
+    if os.path.exists("temp_uploads"):
+        shutil.rmtree("temp_uploads")
+    st.experimental_rerun()
 
-# --- Output clusters ---
-clusters = {}
-for label, fname in zip(labels, image_names):
-    clusters.setdefault(label, []).append(fname)
+# --- User input for DBSCAN epsilon value ---
+st.markdown("---")
+st.subheader("Clustering Settings")
+eps_value = st.slider(
+    "Select a 'strictness' level (Epsilon): Smaller value means stricter clustering.",
+    min_value=0.001,
+    max_value=0.2,
+    value=0.05,
+    step=0.001
+)
+st.info(f"The current epsilon (eps) value is: {eps_value}. This is the maximum distance for two images to be considered in the same cluster.")
 
-for cluster_id, imgs in clusters.items():
-    print(f"Cluster {cluster_id}: {len(imgs)} images")
-    print(imgs)
-    print("------")
+def extract_features(file_object):
+    """
+    Extracts features from an image in memory using the ResNet50 model.
+    """
+    try:
+        # CRITICAL FIX: Reset the file pointer to the beginning of the stream
+        # This prevents the OSError from PIL if the file object has been read before.
+        file_object.seek(0)
+        
+        img = Image.open(file_object).convert('RGB')
+        img = img.resize((224, 224))
+        x = image.img_to_array(img)
+        x = np.expand_dims(x, axis=0)
+        x = preprocess_input(x)
+        features = model.predict(x, verbose=0)
+        return features.flatten()
+    except (IOError, OSError) as e:
+        st.error(f"Could not process image {file_object.name}. It might be corrupted or an invalid format. Error: {e}")
+        return None
+
+def get_common_cluster_name(filenames):
+    """
+    Generates a common name for a cluster based on the filenames, with improvements.
+    """
+    if not filenames:
+        return "Unknown Cluster"
+    if len(filenames) == 1:
+        return os.path.splitext(filenames[0])[0]
+
+    names = [os.path.splitext(f.lower().replace('-', ' ').replace('_', ' '))[0].split() for f in filenames]
+    
+    # Find intersection of words across all names
+    common_words = set(names[0])
+    for name_parts in names[1:]:
+        common_words.intersection_update(name_parts)
+    
+    # Filter common words to remove generic or number-based terms
+    generic_terms = {'1', '2', '3d', 'fop', 'bib', 'plunge', 'and', 'hero', 'images', 'image', 'front'}
+    meaningful_words = [word for word in common_words if word not in generic_terms]
+
+    if meaningful_words:
+        return " ".join(sorted(list(set(meaningful_words))))
+    else:
+        # Fallback to the first filename's base name if no common words are found
+        return os.path.splitext(filenames[0])[0]
+
+# --- Main logic for processing and clustering ---
+if st.session_state.uploaded_files:
+    with st.spinner('Extracting features and clustering images...'):
+        
+        # Extract features for all images in session state
+        features = [extract_features(file) for file in st.session_state.uploaded_files]
+        
+        # Filter out any images that failed to process
+        valid_features_and_files = [(f, st.session_state.uploaded_files[i]) for i, f in enumerate(features) if f is not None]
+        
+        if not valid_features_and_files:
+            st.warning("No valid images could be processed.")
+            st.stop()
+            
+        features = np.array([item[0] for item in valid_features_and_files])
+        valid_files = [item[1] for item in valid_features_and_files]
+
+        # Compute similarity
+        sim_matrix = cosine_similarity(features)
+
+        # Clamp values to ensure they are within a valid range
+        sim_matrix = np.clip(sim_matrix, 0.0, 1.0)
+
+        # Convert similarity to a distance matrix
+        dist_matrix = 1 - sim_matrix
+        
+        # Clustering using DBSCAN with the user-selected eps value
+        dbscan = DBSCAN(eps=eps_value, min_samples=1, metric='precomputed')
+        labels = dbscan.fit_predict(dist_matrix)
+
+    # Create clusters from DBSCAN labels
+    clusters_dict = {}
+    for i, label in enumerate(labels):
+        if label not in clusters_dict:
+            clusters_dict[label] = []
+        clusters_dict[label].append(i)
+    
+    clusters = list(clusters_dict.values())
+    
+    # Prepare DataFrame for Excel
+    data = []
+    for cluster in clusters:
+        cluster_files = [valid_files[i].name for i in cluster]
+        cluster_name = get_common_cluster_name(cluster_files)
+        for fname in cluster_files:
+            name_no_ext = os.path.splitext(fname)[0]
+            data.append([cluster_name, name_no_ext, fname])
+
+    df = pd.DataFrame(data, columns=["Cluster Name", "Image Name (No Ext)", "Exact Filename"])
+
+    # Display clusters in Streamlit
+    if not clusters:
+        st.info("No clusters found. Try adjusting the 'eps' value or uploading more images.")
+    else:
+        st.subheader(f"Found {len(clusters)} clusters")
+        for cluster in clusters:
+            cluster_files = [valid_files[i].name for i in cluster]
+            cluster_name = get_common_cluster_name(cluster_files)
+            
+            # Use an expander for cleaner UI
+            with st.expander(f"Cluster: {cluster_name} ({len(cluster)} images)", expanded=True):
+                cols = st.columns(len(cluster_files))
+                for col, idx in zip(cols, cluster):
+                    file_obj = valid_files[idx]
+                    col.image(file_obj, caption=file_obj.name, use_container_width=True)
+
+    # Download Excel
+    excel_buffer = BytesIO()
+    df.to_excel(excel_buffer, index=False)
+    excel_buffer.seek(0)
+    st.download_button(
+        label="📥 Download Clusters Excel",
+        data=excel_buffer,
+        file_name="image_clusters.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
