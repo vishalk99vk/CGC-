@@ -7,7 +7,6 @@ from tensorflow.keras.applications.resnet50 import ResNet50, preprocess_input
 from tensorflow.keras.preprocessing import image
 import pandas as pd
 from io import BytesIO
-import zipfile
 
 # Load ResNet50 model for feature extraction
 model = ResNet50(weights='imagenet', include_top=False, pooling='avg')
@@ -15,7 +14,7 @@ model = ResNet50(weights='imagenet', include_top=False, pooling='avg')
 st.title("Image Similarity Clustering App")
 
 uploaded_files = st.file_uploader(
-    "Upload Images or Zip File", type=["jpg", "jpeg", "png", "zip"], accept_multiple_files=True
+    "Upload Images", type=["jpg", "jpeg", "png"], accept_multiple_files=True
 )
 
 def extract_features(img_path):
@@ -27,6 +26,7 @@ def extract_features(img_path):
     return features.flatten()
 
 def get_common_cluster_name(filenames):
+    # Extract common substring ignoring numbers and extensions
     names = [os.path.splitext(f)[0] for f in filenames]
     if len(names) == 1:
         return names[0]
@@ -38,24 +38,15 @@ def get_common_cluster_name(filenames):
     return common_name if common_name else names[0]
 
 if uploaded_files:
+    # Save uploaded files temporarily
     temp_dir = "temp_uploads"
     os.makedirs(temp_dir, exist_ok=True)
     file_paths = []
-
     for file in uploaded_files:
-        if file.type == "application/zip" or file.name.endswith(".zip"):
-            # Extract zip
-            with zipfile.ZipFile(file) as z:
-                z.extractall(temp_dir)
-                for f in z.namelist():
-                    if f.lower().endswith((".jpg", ".jpeg", ".png")):
-                        file_paths.append(os.path.join(temp_dir, f))
-        else:
-            # Save individual image
-            file_path = os.path.join(temp_dir, file.name)
-            with open(file_path, "wb") as f:
-                f.write(file.read())
-            file_paths.append(file_path)
+        file_path = os.path.join(temp_dir, file.name)
+        with open(file_path, "wb") as f:
+            f.write(file.read())
+        file_paths.append(file_path)
 
     # Extract features
     features = [extract_features(path) for path in file_paths]
@@ -64,22 +55,22 @@ if uploaded_files:
     # Compute similarity
     sim_matrix = cosine_similarity(features)
 
-    # Clustering (manual based on threshold between 93% and 99%)
-min_threshold = 0.93
-max_threshold = 0.99
-visited = set()
-clusters = []
+    # Clustering (manual based on similarity between 93% and 99%)
+    min_threshold = 0.93
+    max_threshold = 0.99
+    visited = set()
+    clusters = []
 
-for idx, file in enumerate(file_paths):
-    if idx in visited:
-        continue
-    cluster = [idx]
-    visited.add(idx)
-    for j in range(idx + 1, len(file_paths)):
-        if j not in visited and min_threshold <= sim_matrix[idx, j] <= max_threshold:
-            cluster.append(j)
-            visited.add(j)
-    clusters.append(cluster)
+    for idx, file in enumerate(file_paths):
+        if idx in visited:
+            continue
+        cluster = [idx]
+        visited.add(idx)
+        for j in range(idx + 1, len(file_paths)):
+            if j not in visited and min_threshold <= sim_matrix[idx, j] <= max_threshold:
+                cluster.append(j)
+                visited.add(j)
+        clusters.append(cluster)
 
     # Prepare DataFrame for Excel
     data = []
@@ -107,9 +98,8 @@ for idx, file in enumerate(file_paths):
     df.to_excel(excel_buffer, index=False)
     excel_buffer.seek(0)
     st.download_button(
-    label="📥 Download Clusters Excel",
-    data=excel_buffer,
-    file_name="image_clusters.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    key="download_clusters_excel"  # unique key
-)
+        label="📥 Download Clusters Excel",
+        data=excel_buffer,
+        file_name="image_clusters.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
