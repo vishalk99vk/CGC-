@@ -14,7 +14,7 @@ def image_to_feature_vector(image_path, size=(64, 64)):
     img = img.resize(size)
     return np.array(img).flatten()
 
-def cluster_images(image_paths, similarity_threshold=0.97):
+def cluster_images(image_paths, similarity_threshold=0.99):
     features = [image_to_feature_vector(p) for p in image_paths]
     features = np.array(features)
     sim_matrix = cosine_similarity(features)
