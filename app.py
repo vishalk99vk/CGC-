@@ -94,7 +94,7 @@ if st.session_state.uploaded_files:
     
     # Clustering using DBSCAN
     # We use a small 'eps' value to force tighter clusters.
-    dbscan = DBSCAN(eps=0.95, min_samples=1, metric='precomputed')
+    dbscan = DBSCAN(eps=0.05, min_samples=1, metric='precomputed')
     labels = dbscan.fit_predict(dist_matrix)
 
     # Create clusters from DBSCAN labels
