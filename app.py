@@ -107,8 +107,9 @@ for idx, file in enumerate(file_paths):
     df.to_excel(excel_buffer, index=False)
     excel_buffer.seek(0)
     st.download_button(
-        label="📥 Download Clusters Excel",
-        data=excel_buffer,
-        file_name="image_clusters.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+    label="📥 Download Clusters Excel",
+    data=excel_buffer,
+    file_name="image_clusters.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    key="download_clusters_excel"  # unique key
+)
