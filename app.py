@@ -7,6 +7,7 @@ from tensorflow.keras.applications.resnet50 import ResNet50, preprocess_input
 from tensorflow.keras.preprocessing import image
 import pandas as pd
 from io import BytesIO
+from zipfile import ZipFile
 
 # Load ResNet50 model for feature extraction
 model = ResNet50(weights='imagenet', include_top=False, pooling='avg')
@@ -26,7 +27,6 @@ def extract_features(img_path):
     return features.flatten()
 
 def get_common_cluster_name(filenames):
-    # Extract common substring ignoring numbers and extensions
     names = [os.path.splitext(f)[0] for f in filenames]
     if len(names) == 1:
         return names[0]
@@ -37,8 +37,27 @@ def get_common_cluster_name(filenames):
     common_name = " ".join([w for w in names[0].split() if w in common])
     return common_name if common_name else names[0]
 
+def transitive_clustering(sim_matrix, min_threshold=0.93, max_threshold=0.99):
+    n = sim_matrix.shape[0]
+    clusters = []
+    visited = set()
+    for idx in range(n):
+        if idx in visited:
+            continue
+        cluster = set([idx])
+        queue = [idx]
+        visited.add(idx)
+        while queue:
+            current = queue.pop(0)
+            for j in range(n):
+                if j not in visited and min_threshold <= sim_matrix[current, j] <= max_threshold:
+                    cluster.add(j)
+                    queue.append(j)
+                    visited.add(j)
+        clusters.append(list(cluster))
+    return clusters
+
 if uploaded_files:
-    # Save uploaded files temporarily
     temp_dir = "temp_uploads"
     os.makedirs(temp_dir, exist_ok=True)
     file_paths = []
@@ -48,29 +67,10 @@ if uploaded_files:
             f.write(file.read())
         file_paths.append(file_path)
 
-    # Extract features
-    features = [extract_features(path) for path in file_paths]
-    features = np.array(features)
-
-    # Compute similarity
+    features = np.array([extract_features(path) for path in file_paths])
     sim_matrix = cosine_similarity(features)
 
-    # Clustering (manual based on similarity between 93% and 99%)
-    min_threshold = 0.93
-    max_threshold = 0.99
-    visited = set()
-    clusters = []
-
-    for idx, file in enumerate(file_paths):
-        if idx in visited:
-            continue
-        cluster = [idx]
-        visited.add(idx)
-        for j in range(idx + 1, len(file_paths)):
-            if j not in visited and min_threshold <= sim_matrix[idx, j] <= max_threshold:
-                cluster.append(j)
-                visited.add(j)
-        clusters.append(cluster)
+    clusters = transitive_clustering(sim_matrix, min_threshold=0.93, max_threshold=0.99)
 
     # Prepare DataFrame for Excel
     data = []
@@ -102,4 +102,20 @@ if uploaded_files:
         data=excel_buffer,
         file_name="image_clusters.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
+    # Download ZIP of clustered images
+    zip_buffer = BytesIO()
+    with ZipFile(zip_buffer, "w") as zip_file:
+        for cluster in clusters:
+            cluster_name = get_common_cluster_name([os.path.basename(file_paths[i]) for i in cluster])
+            for idx in cluster:
+                fname = os.path.basename(file_paths[idx])
+                zip_file.write(file_paths[idx], arcname=f"{cluster_name}/{fname}")
+    zip_buffer.seek(0)
+    st.download_button(
+        label="📥 Download Clustered Images ZIP",
+        data=zip_buffer,
+        file_name="clustered_images.zip",
+        mime="application/zip"
     )
