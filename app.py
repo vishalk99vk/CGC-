@@ -10,26 +10,32 @@ from openpyxl import Workbook
 # UTILS
 # ---------------------------
 
-def image_to_feature_vector(image_path, size=(64, 64), bins=(8, 8, 8)):
-    """
-    Convert an image to a normalized color histogram feature vector.
-    """
+def image_to_feature_vector_raw(image_path, size=(64, 64)):
+    """Original method: resize and flatten"""
+    img = Image.open(image_path).convert("RGB")
+    img = img.resize(size)
+    return np.array(img).flatten()
+
+def image_to_feature_vector_hist(image_path, size=(64, 64), bins=(8, 8, 8)):
+    """Optional method: color histogram"""
     img = Image.open(image_path).convert("RGB")
     img = img.resize(size)
     img_np = np.array(img)
 
-    # Compute histogram for each channel
     hist_r, _ = np.histogram(img_np[:, :, 0], bins=bins[0], range=(0, 256))
     hist_g, _ = np.histogram(img_np[:, :, 1], bins=bins[1], range=(0, 256))
     hist_b, _ = np.histogram(img_np[:, :, 2], bins=bins[2], range=(0, 256))
 
-    # Concatenate histograms and normalize
     hist = np.concatenate([hist_r, hist_g, hist_b]).astype("float32")
-    hist /= np.sum(hist)  # Normalize
+    hist /= np.sum(hist)
     return hist
 
-def cluster_images(image_paths, similarity_threshold=0.9):
-    features = [image_to_feature_vector(p) for p in image_paths]
+def cluster_images(image_paths, similarity_threshold=0.9, method="raw"):
+    if method == "raw":
+        features = [image_to_feature_vector_raw(p) for p in image_paths]
+    else:
+        features = [image_to_feature_vector_hist(p) for p in image_paths]
+
     features = np.array(features)
     sim_matrix = cosine_similarity(features)
 
@@ -49,7 +55,6 @@ def cluster_images(image_paths, similarity_threshold=0.9):
     return clusters
 
 def get_cluster_name_from_files(file_names):
-    # Extract words from first file and find common words with others
     first_parts = file_names[0].split()
     common_parts = set(first_parts)
     for name in file_names[1:]:
@@ -62,26 +67,24 @@ def save_clusters_to_excel(clusters, output_path):
     wb = Workbook()
     ws = wb.active
     ws.append(["Cluster Name", "Image Name (no ext)", "Exact File Name"])
-
     for cluster in clusters:
         file_names = [os.path.basename(p) for p in cluster]
         cluster_name = get_cluster_name_from_files(file_names)
         for fname in file_names:
-            ws.append([
-                cluster_name,
-                os.path.splitext(fname)[0],
-                fname
-            ])
+            ws.append([cluster_name, os.path.splitext(fname)[0], fname])
     wb.save(output_path)
 
 # ---------------------------
 # STREAMLIT APP
 # ---------------------------
 
-st.title("📸 Image Clustering App (Color Histogram)")
-st.write("Upload images — we'll group them by **visual similarity** using color histograms.")
+st.title("📸 Image Clustering App (90% Similarity)")
+st.write("Upload images — we'll group them by **visual similarity** and name clusters from SKU names.")
 
 uploaded_files = st.file_uploader("Upload Images", type=["png", "jpg", "jpeg"], accept_multiple_files=True)
+
+method = st.selectbox("Select clustering method:", ["Raw Pixels", "Color Histogram"])
+method_key = "raw" if method == "Raw Pixels" else "hist"
 
 if uploaded_files:
     total_size = sum([len(f.getbuffer()) for f in uploaded_files])
@@ -96,9 +99,8 @@ if uploaded_files:
         image_paths.append(path)
 
     with st.spinner("🔍 Clustering images..."):
-        clusters = cluster_images(image_paths, similarity_threshold=0.9)
+        clusters = cluster_images(image_paths, similarity_threshold=0.9, method=method_key)
 
-    # Show clusters
     for idx, cluster in enumerate(clusters, 1):
         file_names = [os.path.basename(p) for p in cluster]
         cluster_name = get_cluster_name_from_files(file_names)
@@ -109,7 +111,6 @@ if uploaded_files:
             with cols[i % 5]:
                 st.image(img, caption=os.path.basename(img_path), use_container_width=True)
 
-    # Save to Excel
     excel_path = os.path.join(tmpdir, "clusters.xlsx")
     save_clusters_to_excel(clusters, excel_path)
 
