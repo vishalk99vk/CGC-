@@ -72,4 +72,52 @@ if uploaded_files:
             with zipfile.ZipFile(file, "r") as zip_ref:
                 zip_ref.extractall(temp_dir)
             # Add all images from ZIP to file_paths
-            for root, _, files in o_
+            for root, _, files in os.walk(temp_dir):
+                for f in files:
+                    if f.lower().endswith(("jpg", "jpeg", "png")):
+                        file_paths.append(os.path.join(root, f))
+        else:
+            # Save single image
+            file_path = os.path.join(temp_dir, file.name)
+            with open(file_path, "wb") as f:
+                f.write(file.read())
+            file_paths.append(file_path)
+
+    if not file_paths:
+        st.warning("No images found in uploaded files.")
+    else:
+        features = np.array([extract_features(path) for path in file_paths])
+        sim_matrix = cosine_similarity(features)
+
+        clusters = transitive_clustering(sim_matrix, min_threshold=0.93, max_threshold=0.99)
+
+        data = []
+        for cluster in clusters:
+            cluster_files = [os.path.basename(file_paths[i]) for i in cluster]
+            cluster_name = get_common_cluster_name(cluster_files)
+            for fname in cluster_files:
+                name_no_ext = os.path.splitext(fname)[0]
+                data.append([cluster_name, name_no_ext, fname])
+
+        df = pd.DataFrame(data, columns=["Cluster Name", "Image Name (No Ext)", "Exact Filename"])
+
+        # Display clusters
+        for cluster in clusters:
+            cluster_files = [os.path.basename(file_paths[i]) for i in cluster]
+            cluster_name = get_common_cluster_name(cluster_files)
+            st.subheader(f"Cluster: {cluster_name}")
+            cols = st.columns(len(cluster_files))
+            for col, idx in zip(cols, cluster):
+                img = Image.open(file_paths[idx])
+                col.image(img, caption=os.path.basename(file_paths[idx]), use_container_width=True)
+
+        # Download Excel
+        excel_buffer = BytesIO()
+        df.to_excel(excel_buffer, index=False)
+        excel_buffer.seek(0)
+        st.download_button(
+            label="📥 Download Clusters Excel",
+            data=excel_buffer,
+            file_name="image_clusters.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
