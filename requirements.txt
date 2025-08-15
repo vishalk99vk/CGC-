@@ -1,5 +1,6 @@
-scikit-image
-tensorflow
-numpy
-pandas
 streamlit
+numpy
+Pillow
+scikit-learn
+tensorflow
+pandas
