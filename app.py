@@ -1,6 +1,5 @@
 import streamlit as st
 import os
-import zipfile
 import numpy as np
 from PIL import Image
 from sklearn.metrics.pairwise import cosine_similarity
@@ -8,6 +7,7 @@ from tensorflow.keras.applications.resnet50 import ResNet50, preprocess_input
 from tensorflow.keras.preprocessing import image
 import pandas as pd
 from io import BytesIO
+import zipfile
 
 # Load ResNet50 model for feature extraction
 model = ResNet50(weights='imagenet', include_top=False, pooling='avg')
@@ -15,7 +15,7 @@ model = ResNet50(weights='imagenet', include_top=False, pooling='avg')
 st.title("Image Similarity Clustering App")
 
 uploaded_files = st.file_uploader(
-    "Upload Images or ZIP file", type=["jpg", "jpeg", "png", "zip"], accept_multiple_files=True
+    "Upload Images or Zip File", type=["jpg", "jpeg", "png", "zip"], accept_multiple_files=True
 )
 
 def extract_features(img_path):
@@ -37,87 +37,76 @@ def get_common_cluster_name(filenames):
     common_name = " ".join([w for w in names[0].split() if w in common])
     return common_name if common_name else names[0]
 
-def transitive_clustering(sim_matrix, min_threshold=0.93, max_threshold=0.99):
-    n = sim_matrix.shape[0]
-    clusters = []
-    visited = set()
-
-    for idx in range(n):
-        if idx in visited:
-            continue
-        cluster = set([idx])
-        queue = [idx]
-        visited.add(idx)
-
-        while queue:
-            current = queue.pop(0)
-            for j in range(n):
-                if j not in visited and min_threshold <= sim_matrix[current, j] <= max_threshold:
-                    cluster.add(j)
-                    queue.append(j)
-                    visited.add(j)
-
-        clusters.append(list(cluster))
-    return clusters
-
 if uploaded_files:
     temp_dir = "temp_uploads"
     os.makedirs(temp_dir, exist_ok=True)
     file_paths = []
 
-    # Process uploaded files
     for file in uploaded_files:
-        if file.name.endswith(".zip"):
-            # Extract ZIP
-            with zipfile.ZipFile(file, "r") as zip_ref:
-                zip_ref.extractall(temp_dir)
-            # Add all images from ZIP to file_paths
-            for root, _, files in os.walk(temp_dir):
-                for f in files:
-                    if f.lower().endswith(("jpg", "jpeg", "png")):
-                        file_paths.append(os.path.join(root, f))
+        if file.type == "application/zip" or file.name.endswith(".zip"):
+            # Extract zip
+            with zipfile.ZipFile(file) as z:
+                z.extractall(temp_dir)
+                for f in z.namelist():
+                    if f.lower().endswith((".jpg", ".jpeg", ".png")):
+                        file_paths.append(os.path.join(temp_dir, f))
         else:
-            # Save single image
+            # Save individual image
             file_path = os.path.join(temp_dir, file.name)
             with open(file_path, "wb") as f:
                 f.write(file.read())
             file_paths.append(file_path)
 
-    if not file_paths:
-        st.warning("No images found in uploaded files.")
-    else:
-        features = np.array([extract_features(path) for path in file_paths])
-        sim_matrix = cosine_similarity(features)
+    # Extract features
+    features = [extract_features(path) for path in file_paths]
+    features = np.array(features)
 
-        clusters = transitive_clustering(sim_matrix, min_threshold=0.93, max_threshold=0.99)
+    # Compute similarity
+    sim_matrix = cosine_similarity(features)
 
-        data = []
-        for cluster in clusters:
-            cluster_files = [os.path.basename(file_paths[i]) for i in cluster]
-            cluster_name = get_common_cluster_name(cluster_files)
-            for fname in cluster_files:
-                name_no_ext = os.path.splitext(fname)[0]
-                data.append([cluster_name, name_no_ext, fname])
+    # Clustering (manual based on threshold)
+    threshold = 0.98  # 96% similarity
+    visited = set()
+    clusters = []
+    for idx, file in enumerate(file_paths):
+        if idx in visited:
+            continue
+        cluster = [idx]
+        visited.add(idx)
+        for j in range(idx + 1, len(file_paths)):
+            if j not in visited and sim_matrix[idx, j] >= threshold:
+                cluster.append(j)
+                visited.add(j)
+        clusters.append(cluster)
 
-        df = pd.DataFrame(data, columns=["Cluster Name", "Image Name (No Ext)", "Exact Filename"])
+    # Prepare DataFrame for Excel
+    data = []
+    for cluster in clusters:
+        cluster_files = [os.path.basename(file_paths[i]) for i in cluster]
+        cluster_name = get_common_cluster_name(cluster_files)
+        for fname in cluster_files:
+            name_no_ext = os.path.splitext(fname)[0]
+            data.append([cluster_name, name_no_ext, fname])
 
-        # Display clusters
-        for cluster in clusters:
-            cluster_files = [os.path.basename(file_paths[i]) for i in cluster]
-            cluster_name = get_common_cluster_name(cluster_files)
-            st.subheader(f"Cluster: {cluster_name}")
-            cols = st.columns(len(cluster_files))
-            for col, idx in zip(cols, cluster):
-                img = Image.open(file_paths[idx])
-                col.image(img, caption=os.path.basename(file_paths[idx]), use_container_width=True)
+    df = pd.DataFrame(data, columns=["Cluster Name", "Image Name (No Ext)", "Exact Filename"])
 
-        # Download Excel
-        excel_buffer = BytesIO()
-        df.to_excel(excel_buffer, index=False)
-        excel_buffer.seek(0)
-        st.download_button(
-            label="📥 Download Clusters Excel",
-            data=excel_buffer,
-            file_name="image_clusters.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+    # Display clusters in Streamlit
+    for cluster in clusters:
+        cluster_files = [os.path.basename(file_paths[i]) for i in cluster]
+        cluster_name = get_common_cluster_name(cluster_files)
+        st.subheader(f"Cluster: {cluster_name}")
+        cols = st.columns(len(cluster_files))
+        for col, idx in zip(cols, cluster):
+            img = Image.open(file_paths[idx])
+            col.image(img, caption=os.path.basename(file_paths[idx]), use_container_width=True)
+
+    # Download Excel
+    excel_buffer = BytesIO()
+    df.to_excel(excel_buffer, index=False)
+    excel_buffer.seek(0)
+    st.download_button(
+        label="📥 Download Clusters Excel",
+        data=excel_buffer,
+        file_name="image_clusters.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
