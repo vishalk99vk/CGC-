@@ -65,7 +65,7 @@ if uploaded_files:
     sim_matrix = cosine_similarity(features)
 
     # Clustering (manual based on threshold)
-    threshold = 0.1  # 96% similarity
+    threshold = 0.99  # 96% similarity
     visited = set()
     clusters = []
     for idx, file in enumerate(file_paths):
